@@ -1,0 +1,284 @@
+Pazookle, a pure python replacement for ChucK.
+==============================================
+Dec/30/2013, Bob Harris <zackobelsch@gmail.com>
+
+Pazookle was born Dec/9/2013, the result of my frustration with ChucK.  One too
+many incomprehensible segfaults spurred me to think there must be a better way.
+
+Whether Pazookle is a better way or not remains to be seen.  ChucK is pretty
+awsome.
+
+
+Installation
+============
+
+(1) Copy this folder and its contents to some location on your disk.
+(2) Add this folder to your PYTHONPATH environment variable.
+
+Note that the package's .py files are in the pazookle subfolder, and that in
+step 2 you add the folder *above* that subfolder to your python path.  The
+pazookle subfolder contains an empty __init__.py file as described in the
+python docs at docs.python.org/2/tutorial/modules.html
+
+(to add: simple test that installation is right)
+
+
+Pazookle vs ChucK
+=================
+
+What Pazookle tries to accomplish is to let you design sounds/music in a manner
+similar to ChucK, but in python, with all the bells and whistles (pun intended)
+that go along with an established language.  Pazookle accomplishes ChucK-like
+syntax and concurrency by overloading python's >> operator and treating shreds
+as coroutines.  These are explained in more detail below.
+
+Where Pazookle falls short of ChucK is that it is not interactive and it does
+not create in real time.
+
+Pazookle uses python's generator capability to manage concurrency.  A "shred"
+is a generator which includes the yield statment to advance time.  For example,
+the code below creates a shred which will "run" for three seconds.
+
+	from pazookle.shred import zook
+	zook.spork(my_shred())
+	zook.run()
+
+	def my_shred():
+		... do something to configure audio ...
+		yield 3*zook.sec
+
+Concurrency is managed by the shreduler (zook is an instance of Shreduler).
+When a shred yields, the shreduler will eventually return to it after
+advancing to the specified time.  In more detail, the shred is placed in a
+time-based priority queue, any other shreds waiting will be run, and audio
+percolates through the pipeline.
+
+Since generators can have yields scattered about them, they look very similar
+to ChucK shreds.  One difference, though, is that there is no "main" shred in
+Pazookle.  All shreds must be written as functions with at least one yield
+(this is what makes them generators).  They may include parameters, which must
+be given values when the shred is sporked.  They can not return anything.
+
+An overloaded right shift operator creates ChucK-like syntax for audio chains.
+For example, the code below creates a reverb chain.  Note that, unlike ChucK,
+we aren't able to create objects at the same time we chain them.
+
+	output = WavOut(filename="my_reverb.wav")
+	oscar  = TriOsc(gain=1)
+	master = PassThru()
+	reverb = Delay(60*zook.msec)
+	reverb.gain = 0.6
+	voice >> master >> output
+	master >> reverb >> reverb >> output
+
+The >> operator is *only* used for connecting sound chains.  Pazookle provides
+no left-to-right assignment.
+
+The double-slash operator is used to disconnect chains.  For example we can
+cut the direct connection from master to output by doing this:
+
+	master // output
+
+Unlike ChucK, we can also connect a chain of unit generators into a control of
+another generator.  In the example below, the sound chain shows that we drive
+the frequency of a carrier oscillator from the output of a modulating
+oscillator (fmMod >> fmCarrier["freq"]).  Meanwhile, the modulator's gain is
+controlled by the output of a linear ramp (gain=ramp).  Not all object
+controls have been set up to allow "drivability", but the most common ones
+are (e.g. bias, gain, frequency, phase, duty cycle and pan).
+
+	output    = WavOut(filename="my_fm.wav")
+	ramp      = LinearStep(bias=10, gain=2500-10)
+	fmMod     = SinOsc(bias=383, gain=ramp, freq=33)
+	fmCarrier = SinOsc(gain=0.3)
+
+	fmMod >> fmCarrier["freq"] >> output
+
+
+Pazookle is not a copy of ChucK
+===============================
+
+While Pazookle is certainly inspired by ChucK, there's no desire to reproduce
+ChucK output exactly.  For example, ChucK ADSR objects have linear decay and
+release, but the Pazookle objects have the more realistic exponential decay and
+release.  However, in some cases, specifically filters, we do strive to make
+the Pazookle filter produce output identical to the corresponding ChucK filter.
+
+The Pazookle architecture (shred scheduling, pipeline management and grandaddy
+unit generator class) was designed without any deep understanding of how ChucK
+works internally.  Nor was ChucK code directly copied or translated.  Instead,
+the design was motivated by thinking about how ChucK may have implemented these
+things, and how they could be accomplished in python.
+
+However, some specific unit generators in Pazookle *were* designed by carefully
+studying the ChucK implementations of these elements.  The author believes this
+is allowed under ChucK's GPL license;  Pazookle uses a more recent version of
+that license.
+
+Further, much terminology has been borrowed from ChucK, in the hopes that this
+will make Pazookle easier to learn for users familiar with ChucK.
+
+
+Examples
+========
+
+(to be written)
+
+
+Architecture
+============
+
+The Pazookle package is comprised from the following source files.  The first
+group defines classes for sound generating objects, or the management thereof.
+The second group is support functions.
+
+	shred        The shreduler;  "time" control and shred management.
+	ugen         Unit generator parent class and simple ugens.
+	generate     Generative ugens.
+	envelope     Envelopes and steps.
+	filter       Filters.
+	buffer       Delays and clips.
+	output       Output units.
+
+	midi         Support for midi (currently no I/O support).
+	interpolate  Support for creating interpolating functions.
+	util         Miscellaneous support.
+	constant     Miscellaneous constants.
+	parse        Support for parsing.
+
+shreduler
+---------
+
+The shreduler manages concurrency and runs the audio pipeline.  It has two
+primary data structures-- a priority queue to track shreds, and a list of
+audio elements.  Additionally it tracks "time" with two variables, self.clock
+and self.now.  self.clock is an integer, and simply counts the number of
+sample ticks that have been generated since start.  self.now is a float, the
+"time" that the most recent shred was activated or reactivated.  In general,
+self.now >= self.clock and floor(self.now) == self.clock.
+
+The priority queue, self.shreds, is a list of (when,function,name) triplets.
+The current implementation keeps these in a simple list, sorted by time.
+
+	when     is the time that the shred should be reactivated.  Typically this
+	         is a float, but the special value None is used to indicate a
+	         shred that should be run immediately.
+	id       a unique number assigned to the shred
+	function is the python function representing the shred.  This is not
+	         really a function, it is of type GeneratorType.
+	name     is a string representing the shred.  This is useful for tracking
+	         shreds while debugging the shreduler.
+
+When a shred is sporked, it is added to the priority queue with when=None.
+When it is its turn to activate, its function f is "called", via f.next().
+This will either return, indicating the shred hit a yield, or it will raise
+a StopIteration exception.  In the latter case we discard the shred;  it has
+finished.  When a shred yields, it yields a time.  If this is a float it is
+treeated as a delta time, relative to the time the shred was activated.  It
+can also be a tuple of the form ("absolute",time), in which case the time is
+an absolute time.  In either case the shred is placed back in the priority
+queue and will be reactivated when its turn comes around.  Note that ties
+are broken in favor of whichever shred was in the queue first.
+
+I plan to expand scheduling to allow events and messages.  The idea is that
+a shred could yield a list of event objects, and would be placed in limbo
+waiting for the first of those events to fire.  One element in the list could
+also be a time;  if the time comes around before any of the events, the
+shred would active (essentially a timeout).  One difficulty with this scheme
+would be the lack of any means to inform the shred *which* event occurred.
+
+We only expect one instance of Shreduler to be created.  This occurs at the
+bottom of shred.py when pazookle.shred is imported.  The Shreduler instance is
+named zook.  There are currently class variables, used in a way that would
+probably get in the way of having multiple shredulers.
+
+The pipeline is initially represented in the shreduler by a list of sinks.
+A sink is any ugen that has feeds no other ugen and which the user requires be
+properly updated with each sample tick.  In most cases the list of sinks is
+automatically generated, but the user can append ugens by calling
+zook.add_sink.
+
+On the first sample tick, the list of sinks is used to generate an update order
+for all ugens feeding into them.  This is performed in zook.find_update_order
+which is automatically called.  The algorithm recursively scans input feeds to
+determine the graph of ugens and determines an update order that guarantees
+all of any ugen's feeds are updated before the ugen is.  For feedback cases the
+guarantee is impossible, so a ugen will receive inputs delayed by one tick for
+its feedback inputs.  This order is used with each tick until any connections
+are altered;  on the next sample tick a new urder is generated.
+
+The shreduler then calls the percolate method for each audio element, in order.
+
+ugen
+----
+
+Unit generators are subclassed from the grandaddy class UGen.  This class
+contains the code that implements the overloaded syntax and pipeline
+construction.  It also implements audio sample percolation control.
+
+(add more about overloaded syntax here)
+
+Every ugen has a defined number of input channels (0, 1 or 2) and output
+channels (1 or 2).  This is a distinct concept from feeds.  Ugens can accept
+any number of input feeds.  Typically these are just summed.  However, some
+special ugens can treat feeds individually.  For example, a Mixer object has
+separate gain controls for the first feed ("dry") and the second ("wet").
+
+Feeds can be mono or stereo, irrespective of the number of input channels a
+ugen has.  Mismatched channel counts, as when two output channels from one ugen
+are fed into a uge with one input channel, are automatically handed in the
+UGen class's percolate method.  The subclass is mostly unaware of this.  When
+a ugen class can support either stereo or mono (and there are many of these),
+its tick method typically has to check whether it has been fed a single
+samples or a sample pair.
+
+Every ugen has bias and gain settings.  Bias is often zero, but a non-zero
+bias facillitates creation of controlling LFOs.  Bias and gain are both
+"drivable" controls.  This means that they can be set from the output of
+another ugen.  The pipeline management considers such controls to be additional
+feeds into the element.  Note that bias and gain are applied *after* the tick
+method.
+
+Users can subclass UGen or UPeridic to write their own unit generators (the
+equivalent of a ChucK ChuGen).  Subclasses can add other drivable controls
+without too much effort;  see for example freq and phase in Periodic.  However,
+this is fairly fragile in the current implementation.  A distinction has to be
+made between drivables that have no side effects and those that do (a side
+effect means we have other object attirbutes to set when the control's value
+changes).  The current implementation has a layer or two of setters/getters. 
+Perhaps this can be improved.
+
+Users can subclass UGraph to write unit generators that build a connection
+graph (equivalent to a ChucK ChubGraph).  Currently there is one class in the
+package, Echo, which was constructed as a UGraph.  There are also two Ugraphs
+in the examples, try_Inlet and try_Outlets.
+
+Note that generative elements have gain = 0 by default.  In other words, they
+all wake up silent.  The motivation is that this forces the user to think about
+what the gain ought to be.  Admittedly, this can be a nuisance, but it is
+fairly easy to use a = SinOsc(gain=1) to set the gain as you create the ugen.
+Additionally, the default gain is a UGen class variable, so it should be
+possible to change the defaults at the start of a program (with all the
+requisite danger of lack of interoperability of programs written with different
+defaults).
+
+
+Miscellany
+----------
+
+Both Shreduler and UGen have built-in debug capability.  For example, calling
+UGen.set_debug("pipeline") will cause several methods to report audio values
+as they are percolated through the pipeline.  See the headers of shred.py and
+ugen.py to see what debug strings are available.  Or grep for "in UGen.debug"
+in all the .py files.
+
+All shreds and ugens can be given names at the time of their creation
+(irrespective of their variable names).  This can be useful in conjunction with
+the debug stuff.
+
+Along with user-defined events, we'd like to have events for things like a
+shred completing or a ramp/evelope reaching its target.
+
+Things in the code that "need work" are indicated with a triple dollar sign
+comment ($$$).
+
