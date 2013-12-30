@@ -1,0 +1,3 @@
+This folder contains chuck versions of generative test programs.  Each test
+produces a .wav file, which should be sample-by-sample identical to the output
+from the corresponding pazookle program.

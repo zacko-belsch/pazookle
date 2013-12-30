@@ -1,0 +1,8 @@
+This folder contains pazookle test programs, intended to "validate" the
+implementation of language functionality.  They are not intended to be
+complete.
+
+As of this writing, self_test.py is an automated battery of tetsts to validate
+connection syntax.  The other tests, try_XXX, tryout different unit generators
+and produce .wav files which the user can verify by inspection.
+

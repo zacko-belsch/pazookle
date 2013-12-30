@@ -1,0 +1,10 @@
+This folder contains test programs related to pazookle, intended to "validate"
+the implementation is comparable to chuck (in terms of audio created).  They
+are not intended to be complete.
+
+The comparison folder contains generative test programs, written in chuck.  The
+output from these is to be compared to the output of a corresponding program
+written in pazookle.
+
+The examples folder contains pazookle rewrites of some of the standard chuck
+examples.

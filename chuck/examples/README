@@ -1,0 +1,6 @@
+This folder contains pazookle rewrites of some of the standard chuck examples
+found at
+	http://chuck.cs.princeton.edu/doc/examples
+
+The folder heierchy and file names are the same as at the website above,
+except the file extensions are .py instead of .ck.
